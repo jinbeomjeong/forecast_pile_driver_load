@@ -1,4 +1,4 @@
-import json, os
+import os
 import numpy as np
 import pandas as pd
 
@@ -23,7 +23,7 @@ def load_logging_data(data_root_path: str):
 
         txt_list = []
 
-        with open(os.path.join('data', file_name), 'r') as file:
+        with open(os.path.join(data_root_path, file_name), 'r') as file:
             while True:
                 txt = file.readline()
 

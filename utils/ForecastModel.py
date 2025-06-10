@@ -2,7 +2,7 @@ import tensorflow as tf
 from tensorflow import keras
 
 
-def lstm_est_model(feature, seq_len, hidden_size, n_outputs):
+def lstm_est_model_v1(feature, seq_len, hidden_size, n_outputs):
     optimizer = keras.optimizers.Adam(learning_rate=0.001)
 
     input_tensor = keras.layers.Input(shape=(seq_len, feature.shape[2]), dtype=tf.float32)
@@ -42,6 +42,30 @@ def lstm_est_model(feature, seq_len, hidden_size, n_outputs):
 
     # Model Compilation
     model = keras.Model(inputs=input_tensor, outputs=output_tensor)
+    model.compile(loss='mean_squared_error', optimizer=optimizer, metrics=['mean_absolute_error', 'mean_absolute_percentage_error'])
+
+    return model
+
+
+
+def lstm_est_model_v2(input_tensor, seq_len, hidden_size):
+    optimizer = keras.optimizers.Adam(learning_rate=0.001)
+
+    input_layer = keras.layers.Input(shape=(seq_len, input_tensor.shape[2]), dtype=tf.float32)
+
+    conv_layer = keras.layers.Conv1D(filters=32, kernel_size=3, padding='same', activation='relu')(input_layer)
+    #conv_layer = keras.layers.MaxPooling1D(pool_size=2)(conv_layer)
+    conv_layer = keras.layers.Conv1D(filters=64, kernel_size=3, padding='same', activation='relu')(conv_layer)
+    #conv_layer = keras.layers.MaxPooling1D(pool_size=2)(conv_layer)
+    conv_layer = keras.layers.Conv1D(filters=128, kernel_size=3, padding='same', activation='relu')(conv_layer)
+    #conv_layer = keras.layers.MaxPooling1D(pool_size=2)(conv_layer)
+
+    lstm_layer = keras.layers.LSTM(units=hidden_size, return_sequences=False, name='lstm')(conv_layer)
+
+    lstm_output_layer = keras.layers.Dense(1, activation='linear')(lstm_layer)
+
+    model = keras.Model(inputs=input_layer, outputs=lstm_output_layer)
+
     model.compile(loss='mean_squared_error', optimizer=optimizer, metrics=['mean_absolute_error', 'mean_absolute_percentage_error'])
 
     return model

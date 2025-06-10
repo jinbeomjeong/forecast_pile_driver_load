@@ -1,80 +1,60 @@
-import datetime
+import datetime, argparse
 import numpy as np
-import pandas as pd
 import tensorflow as tf
 
 from utils.Dataset import load_logging_data, create_lstm_dataset
-from utils.ForecastModel import lstm_est_model
+from utils.ForecastModel import lstm_est_model_v2
 from tensorflow import keras
+from sklearn.metrics import r2_score, mean_absolute_error, mean_absolute_percentage_error
 
+parser = argparse.ArgumentParser()
+parser.add_argument("--path", type=str, default='data')
+args = parser.parse_args()
 
-dataset = load_logging_data(data_root_path='data')
+dataset = load_logging_data(data_root_path=args.path)
 
 angle_name_list = list(dataset.columns)[22:24] + list(dataset.columns)[26:28]
-
-for angle_name in angle_name_list:
-    dataset = dataset[dataset[angle_name] < 5]
-
-for angle_name in angle_name_list:
-    dataset = dataset[dataset[angle_name] > -5]
-
-dataset.reset_index(drop=True, inplace=True)
-
 pressure_name_list = list(dataset.columns)[18:20] + list(dataset.columns)[24:26]
-
-for pressure_name in pressure_name_list:
-    dataset = dataset[dataset[pressure_name] > 0]
-
-dataset.reset_index(drop=True, inplace=True)
-
-dataset = dataset[dataset['caloutput_drill_depth CH=26'] > 3]
-dataset.reset_index(drop=True, inplace=True)
-
-dataset = dataset[dataset['caloutput_rotate_velocity CH=25'] > 0]
-dataset.reset_index(drop=True, inplace=True)
-
 dataset['power'] = dataset['pressure_1_pressure_transmitter_1_drive1 CH=23'] * dataset['caloutput_rotate_velocity CH=25']
-dataset['power'] = (dataset['power']-dataset['power'].min()) / (dataset['power'].max()-dataset['power'].min())
-dataset = dataset[dataset['power'] != 0]
-dataset.reset_index(drop=True, inplace=True)
 
-dataset['pressure_1_pressure_transmitter_1_drive1 CH=23'] = dataset['pressure_1_pressure_transmitter_1_drive1 CH=23'] / 200
-dataset['caloutput_rotate_velocity CH=25'] = dataset['caloutput_rotate_velocity CH=25'] / 35
+dataset = dataset[['pressure_1_pressure_transmitter_1_drive1 CH=23']+angle_name_list+['caloutput_rotate_velocity CH=25', 'caloutput_drill_depth CH=26', 'power']]
 
-extract_data = dataset[['pressure_1_pressure_transmitter_1_drive1 CH=23']+angle_name_list+['caloutput_rotate_velocity CH=25', 'caloutput_drill_depth CH=26', 'power']].to_numpy()
+for angle_name in angle_name_list:
+    dataset[angle_name] = dataset[angle_name]/33
 
-grad_data_list = list()
+dataset['pressure_1_pressure_transmitter_1_drive1 CH=23'] = dataset['pressure_1_pressure_transmitter_1_drive1 CH=23'] / 256
+dataset['caloutput_rotate_velocity CH=25'] = dataset['caloutput_rotate_velocity CH=25'] / 50
+dataset['caloutput_drill_depth CH=26'] = dataset['caloutput_drill_depth CH=26'] / 31
+dataset['power'] = dataset['power']/4100
 
-for data in extract_data.T:
-    grad_data_list.append(np.gradient(data))
+extract_data_df = dataset[['pressure_1_pressure_transmitter_1_drive1 CH=23']+angle_name_list+['caloutput_rotate_velocity CH=25', 'caloutput_drill_depth CH=26', 'power']]
 
-grad_data_arr = np.array(grad_data_list).T
-extract_data = np.concatenate([extract_data, grad_data_arr], axis=1)
+seq_len = 30
+pred_distance = 30
+hidden_size = 256
 
+feature, target = create_lstm_dataset(extract_data_df.values, seq_len=seq_len, pred_distance=pred_distance, target_idx_pos=7)
+lstm_model = lstm_est_model_v2(input_tensor=feature, seq_len=seq_len, hidden_size=hidden_size)
 
-pred_distance_list = [10, 20, 30]
+early_stop = keras.callbacks.EarlyStopping(monitor='val_loss', patience=500, verbose=0)
+csv_logger = keras.callbacks.CSVLogger(filename='log_'+str(pred_distance)+'.csv', append=False, separator=',')
+model_chk_point = keras.callbacks.ModelCheckpoint(filepath='model_'+str(pred_distance)+'.keras', monitor="val_loss", verbose=0,
+                                                  save_best_only=True, save_weights_only=False, mode="min", save_freq="epoch",
+                                                  initial_value_threshold=None)
 
-for pred_distance in pred_distance_list:
-    early_stop = keras.callbacks.EarlyStopping(monitor='val_loss', patience=500, verbose=0)
-    csv_logger = keras.callbacks.CSVLogger(filename='log_'+str(pred_distance)+'.csv', append=False, separator=',')
-    model_chk_point = keras.callbacks.ModelCheckpoint(filepath='model_'+str(pred_distance)+'.keras', monitor="val_loss", verbose=0,
-                                                      save_best_only=True, save_weights_only=False, mode="min", save_freq="epoch",
-                                                      initial_value_threshold=None)
+log_dir = "logs/" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=log_dir, histogram_freq=1)
 
-    log_dir = "logs/" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-    tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=log_dir, histogram_freq=1)
+lstm_model.fit(x=feature, y=target, validation_data=(feature, target), epochs=10000000,
+               batch_size=10000, verbose=2, callbacks=[early_stop, csv_logger, model_chk_point, tensorboard_callback])
 
-    seq_len = 30
-    hidden_size = 500
-    n_output = 1
+best_lstm_model = keras.models.load_model('model_30.keras')
+pred = np.squeeze(best_lstm_model.predict(feature, verbose=1))
 
-    feature, target = create_lstm_dataset(extract_data, seq_len=seq_len, pred_distance=pred_distance, target_idx_pos=7)
+for i, val in enumerate(pred):
+    if val < 0:
+        pred[i] = 0
 
-    model = lstm_est_model(feature=feature, seq_len=seq_len, hidden_size=hidden_size, n_outputs=n_output)
-
-    model.fit(x=feature, y=target, validation_data=(feature, target), epochs=1000000,
-              batch_size=10000, verbose=0, callbacks=[early_stop, csv_logger, model_chk_point, tensorboard_callback])
-
-
-
-
+print(r2_score(target, pred))
+print(mean_absolute_error(target, pred))
+print(mean_absolute_percentage_error(target, pred))
