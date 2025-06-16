@@ -1,14 +1,12 @@
 import os
 import numpy as np
 import pandas as pd
+import pytorch_lightning as pl
 
+from torch.utils.data import Dataset, DataLoader
 from tqdm.auto import tqdm
 
-#with open("data_attribute_name.json", "r") as file_handle:
-#    data_attribute = json.load(file_handle)
 
-#feature_name_list = data_attribute['feature_name']
-#target_name = data_attribute['target_name']
 
 
 def load_logging_data(data_root_path: str):
@@ -61,3 +59,36 @@ def create_lstm_dataset(data: np.array, seq_len=1, pred_distance=0, target_idx_p
                 target.append(data[i + pred_distance, target_idx_pos])
 
     return np.array(feature), np.array(target)
+
+
+class TimeSeriesDataset(Dataset):
+    def __init__(self, data: np.array, seq_len: int, pred_distance: int, target_idx_pos: int):
+        self.__data = data
+        self.__seq_len = seq_len
+        self.__pred_distance = pred_distance
+        self.__target_idx_pos = target_idx_pos
+
+    def __len__(self):
+        return len(self.__data) - self.__pred_distance
+
+    def __getitem__(self, idx):
+        if idx+1 >= self.__seq_len:
+            x = self.__data[idx+1-self.__seq_len : idx+1, :]
+            y = self.__data[idx+self.__pred_distance, self.__target_idx_pos]
+
+            return x, y
+
+
+class TimeSeriesDataModule(pl.LightningDataModule):
+    def __init__(self, train_data: Dataset, val_data: Dataset, seq_len, batch_size):
+        super().__init__()
+        self.__train_data = train_data
+        self.__val_data = val_data
+        self.__seq_len = seq_len
+        self.__batch_size = batch_size
+
+    def train_dataloader(self):
+        return DataLoader(self.__train_data, batch_size=self.__batch_size, shuffle=False)
+
+    def val_dataloader(self):
+        return DataLoader(self.__val_data, batch_size=self.__batch_size, shuffle=False)

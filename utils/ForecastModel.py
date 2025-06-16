@@ -1,71 +1,111 @@
-import tensorflow as tf
-from tensorflow import keras
-
-
-def lstm_est_model_v1(feature, seq_len, hidden_size, n_outputs):
-    optimizer = keras.optimizers.Adam(learning_rate=0.001)
-
-    input_tensor = keras.layers.Input(shape=(seq_len, feature.shape[2]), dtype=tf.float32)
-    input_flatten_layer = keras.layers.Flatten()(input_tensor)
-
-    mean_tensor = tf.reduce_mean(input_tensor, axis=1)
-    max_tensor = tf.reduce_max(input_tensor, axis=1)
-    min_tensor = tf.reduce_min(input_tensor, axis=1)
-    sum_tensor = tf.reduce_sum(input_tensor, axis=1)
-    std_tensor = tf.math.reduce_std(input_tensor, axis=1)
-
-    avg_low_bool = tf.less(input_tensor, tf.expand_dims(mean_tensor, axis=1))
-    avg_low_count = tf.math.count_nonzero(avg_low_bool, axis=1, dtype=tf.float32)
-    avg_high_count = tf.math.count_nonzero(tf.math.logical_not(avg_low_bool), axis=1, dtype=tf.float32)
-
-    feature_eng_tensor = keras.layers.concatenate(inputs=[mean_tensor, max_tensor, min_tensor, sum_tensor, std_tensor, avg_low_count, avg_high_count])
-
-    # Convolutional Layers
-    conv_layer = keras.layers.Conv1D(filters=64, kernel_size=7, padding='valid', activation='relu', kernel_regularizer=keras.regularizers.l2(0.03))(input_tensor)
-
-    conv_layer = keras.layers.Conv1D(filters=128, kernel_size=5, padding='valid', activation='relu', kernel_regularizer=keras.regularizers.l2(0.03))(conv_layer)
-    conv_layer = keras.layers.MaxPooling1D(pool_size=2)(conv_layer)
-    conv_layer = keras.layers.Conv1D(filters=128, kernel_size=5, padding='valid', activation='relu', kernel_regularizer=keras.regularizers.l2(0.03))(conv_layer)
-    conv_layer = keras.layers.Conv1D(filters=64, kernel_size=5, padding='valid', activation='relu', kernel_regularizer=keras.regularizers.l2(0.03))(conv_layer)
-    conv_flatten_layer = keras.layers.Flatten()(conv_layer)
-
-    # LSTM Layers
-    lstm_output_1 = keras.layers.LSTM(units=hidden_size, return_sequences=False, kernel_regularizer=keras.regularizers.l2(0.03), name='lstm_1')(conv_layer)
-    lstm_output_2 = keras.layers.LSTM(units=hidden_size, return_sequences=True, kernel_regularizer=keras.regularizers.l2(0.03), name='lstm_2')(conv_layer)
-    lstm_output_2 = keras.layers.LSTM(units=int(hidden_size /2), return_sequences=False, kernel_regularizer=keras.regularizers.l2(0.03), name='lstm_3')(lstm_output_2)
-
-    # Concatenation of all features
-    concat_tensor = keras.layers.concatenate(inputs=[input_flatten_layer, conv_flatten_layer, lstm_output_1, lstm_output_2, feature_eng_tensor], axis=-1)
-
-    # Output Layer
-    output_tensor = keras.layers.Dense(n_outputs, activation='linear')(concat_tensor)
-
-    # Model Compilation
-    model = keras.Model(inputs=input_tensor, outputs=output_tensor)
-    model.compile(loss='mean_squared_error', optimizer=optimizer, metrics=['mean_absolute_error', 'mean_absolute_percentage_error'])
-
-    return model
+import torch
+import numpy as np
+import torch.nn as nn
+import pytorch_lightning as pl
 
 
 
-def lstm_est_model_v2(input_tensor, seq_len, hidden_size):
-    optimizer = keras.optimizers.Adam(learning_rate=0.001)
 
-    input_layer = keras.layers.Input(shape=(seq_len, input_tensor.shape[2]), dtype=tf.float32)
 
-    conv_layer = keras.layers.Conv1D(filters=32, kernel_size=3, padding='same', activation='relu')(input_layer)
-    #conv_layer = keras.layers.MaxPooling1D(pool_size=2)(conv_layer)
-    conv_layer = keras.layers.Conv1D(filters=64, kernel_size=3, padding='same', activation='relu')(conv_layer)
-    #conv_layer = keras.layers.MaxPooling1D(pool_size=2)(conv_layer)
-    conv_layer = keras.layers.Conv1D(filters=128, kernel_size=3, padding='same', activation='relu')(conv_layer)
-    #conv_layer = keras.layers.MaxPooling1D(pool_size=2)(conv_layer)
 
-    lstm_layer = keras.layers.LSTM(units=hidden_size, return_sequences=False, name='lstm')(conv_layer)
 
-    lstm_output_layer = keras.layers.Dense(1, activation='linear')(lstm_layer)
 
-    model = keras.Model(inputs=input_layer, outputs=lstm_output_layer)
 
-    model.compile(loss='mean_squared_error', optimizer=optimizer, metrics=['mean_absolute_error', 'mean_absolute_percentage_error'])
 
-    return model
+
+
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model, max_len=5000):
+        super(PositionalEncoding, self).__init__()
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-np.log(10000.0) / d_model))
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        pe = pe.unsqueeze(0).transpose(0, 1) # (max_len, 1, d_model)
+        self.register_buffer('pe', pe)
+
+    def forward(self, x):
+        # x: (sequence_length, batch_size, d_model)
+        return x + self.pe[:x.size(0), :]
+
+
+class TransformerRegressor(nn.Module):
+    def __init__(self, n_features, d_model, nhead, num_encoder_layers, dim_feedforward, dropout,
+                 output_sequence_length=1):
+        super().__init__()
+        self.n_features = n_features
+        self.d_model = d_model
+
+        self.input_linear = nn.Linear(n_features, d_model)  # 입력 특성 수를 d_model로 매핑
+        self.positional_encoding = PositionalEncoding(d_model)
+
+        encoder_layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=nhead,
+                                                   dim_feedforward=dim_feedforward, dropout=dropout,
+                                                   batch_first=False)  # (seq_len, batch, feature)
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_encoder_layers)
+
+        # 트랜스포머 인코더의 출력을 받아 회귀 값을 예측하는 선형 레이어
+        # 인코더의 마지막 레이어 출력 (d_model)을 받아 n_features * output_sequence_length 로 예측
+        self.output_linear = nn.Linear(d_model, n_features * output_sequence_length)
+        self.output_sequence_length = output_sequence_length
+
+    def forward(self, src):
+        # src: (batch_size, sequence_length, n_features)
+        # TransformerEncoder는 (sequence_length, batch_size, n_features) 형태를 기대하므로 transpose
+        src = src.permute(1, 0, 2)  # (sequence_length, batch_size, n_features)
+
+        src = self.input_linear(src)  # (sequence_length, batch_size, d_model)
+        src = self.positional_encoding(src)
+
+        output = self.transformer_encoder(src)  # (sequence_length, batch_size, d_model)
+
+        # 마지막 타임스텝의 출력을 사용하여 예측
+        # 회귀 분석에서는 보통 마지막 시점의 출력을 사용하거나, 모든 시점의 출력을 결합하여 사용
+        # 여기서는 마지막 시점의 출력을 사용합니다.
+        output = output[-1, :, :]  # (batch_size, d_model)
+
+        predictions = self.output_linear(output)  # (batch_size, n_features * output_sequence_length)
+
+        # 예측 값을 (batch_size, output_sequence_length, n_features) 형태로 reshape
+        predictions = predictions.view(predictions.size(0), self.output_sequence_length, self.n_features)
+
+        return predictions
+
+
+class LitTransformerRegressor(pl.LightningModule):
+    def __init__(self, n_features, d_model, nhead, num_encoder_layers, dim_feedforward, dropout,
+                 output_sequence_length, learning_rate):
+        super().__init__()
+        self.save_hyperparameters() # 하이퍼파라미터 저장
+        self.model = TransformerRegressor(n_features, d_model, nhead, num_encoder_layers,
+                                           dim_feedforward, dropout, output_sequence_length)
+        self.criterion = nn.MSELoss() # 회귀 문제에 적합한 MSE 손실 함수
+
+    def forward(self, x):
+        return self.model(x)
+
+    def training_step(self, batch, batch_idx):
+        x, y = batch
+        y_hat = self(x)
+        loss = self.criterion(y_hat, y)
+        self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+        return loss
+
+    def validation_step(self, batch, batch_idx):
+        x, y = batch
+        y_hat = self(x)
+        loss = self.criterion(y_hat, y)
+        self.log('val_loss', loss, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+        return loss
+
+    def test_step(self, batch, batch_idx):
+        x, y = batch
+        y_hat = self(x)
+        loss = self.criterion(y_hat, y)
+        self.log('test_loss', loss, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+        return loss
+
+    def configure_optimizers(self):
+        optimizer = torch.optim.Adam(self.parameters(), lr=self.hparams.learning_rate)
+        return optimizer
