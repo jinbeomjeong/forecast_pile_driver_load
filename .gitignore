@@ -125,6 +125,3 @@ dmypy.json
 
 # pycharm enviroment
 .idea
-
-# logging data
-data
