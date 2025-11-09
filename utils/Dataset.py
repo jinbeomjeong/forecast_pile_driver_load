@@ -4,12 +4,6 @@ import pandas as pd
 
 from tqdm.auto import tqdm
 
-#with open("data_attribute_name.json", "r") as file_handle:
-#    data_attribute = json.load(file_handle)
-
-#feature_name_list = data_attribute['feature_name']
-#target_name = data_attribute['target_name']
-
 
 def load_logging_data(data_root_path: str):
     file_name_list = os.listdir(data_root_path)
@@ -23,7 +17,7 @@ def load_logging_data(data_root_path: str):
 
         txt_list = []
 
-        with open(os.path.join(data_root_path, file_name), 'r') as file:
+        with open(os.path.join(data_root_path, file_name), 'r', encoding='cp949') as file:
             while True:
                 txt = file.readline()
 
@@ -58,25 +52,12 @@ def load_logging_data(data_root_path: str):
     return dataset
 
 
-def create_regression_dataset(data: np.array, pred_distance=0, target_idx_pos=1):
-    feature, target = [], []
-
-    for i in tqdm(range(data.shape[0] - pred_distance), desc='Creating Regression dataset...'):
-        if i+1 >= pred_distance:
-            feature.append(data[i+1-pred_distance:i+1, :target_idx_pos])
-            target.append(data[i+1:i+1+pred_distance, target_idx_pos])
-
-    return np.array(feature), np.array(target)
-
-
-def create_lstm_dataset(data: np.array, seq_len=1, pred_distance=0, target_idx_pos=1):
+def create_seq_2_seq_dataset_v2(data: np.array, seq_len=1, pred_distance=0):
     feature, target = [], []
 
     for i in tqdm(range(data.shape[0] - pred_distance), desc='creating LSTM dataset...'):
         if i+1 >= seq_len:
-            feature.append(data[i+1-seq_len:i+1, 0:target_idx_pos])
-
-            if target_idx_pos >= 0:
-                target.append(data[i + pred_distance, target_idx_pos])
+            feature.append(data[i+1-seq_len:i+1])
+            target.append(data[i+1:i+1+pred_distance])
 
     return np.array(feature), np.array(target)
