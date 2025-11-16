@@ -16,7 +16,7 @@ spec = (tf.TensorSpec(best_model.inputs[0].shape, tf.float32, name='input'),)
 onnx_model, _ = tf2onnx.convert.from_keras(best_model, input_signature=spec)
 logging.info('converted ONNX model')
 
-with open('../model.onnx', "wb") as f:
+with open('../models/model.onnx', "wb") as f:
     f.write(onnx_model.SerializeToString())
 
 logging.info('saved ONNX model')

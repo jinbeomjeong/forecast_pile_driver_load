@@ -35,7 +35,6 @@ def time_warp(series, sigma=0.2, knots=4):
     return warped_series
 
 
-
 def create_seq_dataset_multiple_input_single_output(data: np.array, seq_len=1, pred_distance=0, target_idx_pos=1):
     feature, target = [], []
 

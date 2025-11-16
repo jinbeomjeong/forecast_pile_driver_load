@@ -1,23 +1,94 @@
 import tensorflow as tf
 from tensorflow import keras
+from utils.layer import InceptionBlock1D, FeatureWiseScalingLayer
 from utils.model import time_mixer_block
+from utils.metric import smape
 from utils.miscellaneous import count_divisions_by_two
 from tensorflow.keras.metrics import Precision, Recall, AUC
 
 
 strategy = tf.distribute.MirroredStrategy()
 
-with strategy.scope():
-    def build_model(input_shape, d_dims=64, dropout_rate=0.2, learning_rate=0.001):
-        input_layer = keras.layers.Input(shape=input_shape)
 
+def build_model(input_shape=(1, 1), dropout_rate=0.2):
+    input_layer = keras.layers.Input(shape=input_shape, name='input_layer')
+    y1 = input_layer
+
+    for i in range(3):
+        y1_1 = InceptionBlock1D(output_dim_1x1=384, hidden_dim_3x3=192, output_dim_3x3=384, hidden_dim_5x5=64, output_dim_5x5=128,
+                                hidden_dim_7x7=32, output_dim_7x7=64, output_dim_max_pool=128, dropout_rate=dropout_rate)(y1)
+        y1_1 = keras.layers.Conv1D(filters=input_shape[1], kernel_size=3, strides=1, activation='gelu', padding='same')(y1_1)
+        y1 = InceptionBlock1D(output_dim_1x1=384, hidden_dim_3x3=192, output_dim_3x3=384, hidden_dim_5x5=48, output_dim_5x5=128,
+                                hidden_dim_7x7=32, output_dim_7x7=64, output_dim_max_pool=128, dropout_rate=dropout_rate)(y1_1)
+
+    y1 = keras.layers.Conv1D(filters=input_shape[0], kernel_size=3, strides=1, activation='gelu', padding='same')(y1)
+    y1 = keras.layers.Dropout(dropout_rate)(y1)
+    y1 = keras.layers.Dense(units=1, activation='linear', name='output_1')(y1)
+
+    y2 = keras.layers.concatenate(inputs=[y1, input_layer], axis=2)
+
+    for i in range(3):
+        y2_1 = InceptionBlock1D(output_dim_1x1=384, hidden_dim_3x3=192, output_dim_3x3=384, hidden_dim_5x5=48, output_dim_5x5=128,
+                                hidden_dim_7x7=32, output_dim_7x7=64, output_dim_max_pool=128, dropout_rate=dropout_rate)(y2)
+        y2_1 = keras.layers.Conv1D(filters=input_shape[1], kernel_size=3, strides=1, activation='gelu', padding='same')(y2_1)
+        y2 = InceptionBlock1D(output_dim_1x1=384, hidden_dim_3x3=192, output_dim_3x3=384, hidden_dim_5x5=48, output_dim_5x5=128,
+                                hidden_dim_7x7=32, output_dim_7x7=64, output_dim_max_pool=128, dropout_rate=dropout_rate)(y2_1)
+
+    y2 = keras.layers.Conv1D(filters=input_shape[0], kernel_size=3, strides=1, activation='gelu', padding='same')(y2)
+    y2 = keras.layers.Dropout(dropout_rate)(y2)
+    y2 = keras.layers.Dense(units=1, activation='linear')(y2)
+    y2_add = keras.layers.add(inputs=[y2, y1], name='output_2')
+
+    y3 = keras.layers.concatenate(unputs=[y2_add, input_layer], axis=2)
+
+    for i in range(3):
+        y3_1 = InceptionBlock1D(output_dim_1x1=384, hidden_dim_3x3=192, output_dim_3x3=384, hidden_dim_5x5=48, output_dim_5x5=128,
+                                hidden_dim_7x7=32, output_dim_7x7=64, output_dim_max_pool=128, dropout_rate=dropout_rate)(y3)
+        y3_1 = keras.layers.Conv1D(filters=input_shape[1], kernel_size=3, strides=1, activation='gelu', padding='same')(y3_1)
+        y3 = InceptionBlock1D(output_dim_1x1=384, hidden_dim_3x3=192, output_dim_3x3=384, hidden_dim_5x5=48, output_dim_5x5=128,
+                                hidden_dim_7x7=32, output_dim_7x7=64, output_dim_max_pool=128, dropout_rate=dropout_rate)(y3_1)
+
+    y3 = keras.layers.Conv1D(filters=input_shape[0], kernel_size=3, strides=1, activation='gelu', padding='same')(y3)
+    y3 = keras.layers.Dropout(dropout_rate)(y3)
+    y3 = keras.layers.Dense(units=1, activation='linear')(y3)
+    y3_add = keras.layers.add(inputs=[y3, y2_add], name='output_3')
+
+    y4 = keras.layers.concatenate(inputs=[y3_add, input_layer], axis=2)
+
+    for j in range(3):
+        y4_1 = InceptionBlock1D(output_dim_1x1=384, hidden_dim_3x3=192, output_dim_3x3=384, hidden_dim_5x5=48, output_dim_5x5=128,
+                                hidden_dim_7x7=32, output_dim_7x7=64, output_dim_max_pool=128, dropout_rate=dropout_rate)(y4)
+        y4_1 = keras.layers.Conv1D(filters=input_shape[1], kernel_size=3, strides=1, activation='gelu', padding='same')(y4_1)
+        y4 = InceptionBlock1D(output_dim_1x1=384, hidden_dim_3x3=192, output_dim_3x3=384, hidden_dim_5x5=48, output_dim_5x5=128,
+                                hidden_dim_7x7=32, output_dim_7x7=64, output_dim_max_pool=128, dropout_rate=dropout_rate)(y4_1)
+
+    y4 = keras.layers.Conv1D(filters=input_shape[0], kernel_size=3, strides=1, activation='gelu', padding='same')(y4)
+    y4 = keras.layers.Dropout(dropout_rate)(y4)
+    y4 = keras.layers.Dense(units=1, activation='linear')(y4)
+
+    y4_add = keras.layers.add([y4, y3_add], name='output_4')
+
+    optimizer = keras.optimizers.Adam(learning_rate=0.001)
+    model = keras.models.Model(inputs=input_layer, outputs=[y1, y2_add, y3_add, y4_add])
+    model.compile(optimizer=optimizer, loss={'output_1': 'mse', 'output_2': 'mse', 'output_3': 'mse', 'output_4': 'mse'},
+                  loss_weights={'output_1': 1.0, 'output_2': 1.0, 'output_3': 1.0, 'output_4': 1.0},
+                  metrics={'output_1': ['mean_absolute_error', 'mean_absolute_percentage_error', smape],
+                           'output_2': ['mean_absolute_error', 'mean_absolute_percentage_error', smape],
+                           'output_3': ['mean_absolute_error', 'mean_absolute_percentage_error', smape],
+                           'output_4': ['mean_absolute_error', 'mean_absolute_percentage_error', smape]})
+    return model
+
+
+with strategy.scope():
+    def build_predict_model(input_shape, d_dims=64, dropout_rate=0.2, learning_rate=0.001):
+        input_layer = keras.layers.Input(shape=input_shape)
         pos_tensor = input_layer[:, :, 0:4]
-        pressure_rotation_speed_tensor = input_layer[:, :, 4:6]
+        pressure_tensor = input_layer[:, :, 4:6]
 
         pos_tensor = keras.layers.BatchNormalization()(pos_tensor)
-        pressure_rotation_speed_tensor = keras.layers.LayerNormalization()(pressure_rotation_speed_tensor)
+        pressure_tensor = keras.layers.BatchNormalization()(pressure_tensor)
 
-        x = keras.layers.concatenate([pos_tensor, pressure_rotation_speed_tensor], axis=2)
+        x = keras.layers.concatenate([pos_tensor, pressure_tensor], axis=2)
         x_res = keras.layers.Dense(units=d_dims, activation='gelu')(x)
 
         for i in range(count_divisions_by_two(input_shape[0])+1):
@@ -27,33 +98,29 @@ with strategy.scope():
             x = keras.layers.Dropout(dropout_rate)(x)
             x = keras.layers.Conv1D(filters=d_dims, kernel_size=3, activation='gelu', padding='causal',
                                     dilation_rate=dilation_rate)(x)
-            x = keras.layers.Dropout(dropout_rate)(x)
 
             x_res = keras.layers.BatchNormalization()(x + x_res)
             x_res = keras.layers.Activation('gelu')(x_res)
 
         y = keras.layers.Flatten()(x_res)
-        y2, y3 = tf.split(y, num_or_size_splits=2, axis=1)
-        y3 = keras.layers.LayerNormalization()(y3)
-        y3 = keras.layers.Activation('gelu')(y3)
+        y = keras.layers.Dropout(dropout_rate)(y)
 
-        y_res = keras.layers.Dense(units=input_shape[0]*3, activation='linear')(y2*y3)
+        y = FeatureWiseScalingLayer()(y)
+        y_res = keras.layers.Dense(units=input_shape[0]*3, activation='linear')(y)
+        y_res = keras.layers.LayerNormalization()(y_res)
 
         for j in range(3):
             y = time_mixer_block(input_layer=y_res, pred_len=input_shape[0]*3, dropout_rate=dropout_rate)
             y_res = y + y_res
 
-        y = keras.layers.Dropout(dropout_rate)(y_res)
-
-        y2, y3 = tf.split(y, num_or_size_splits=2, axis=1)
-        y3 = keras.layers.LayerNormalization()(y3)
-        y3 = keras.layers.Activation('gelu')(y3)
-
-        y = keras.layers.LayerNormalization()(y2 * y3)
+        y = keras.layers.LayerNormalization()(y_res)
+        y = FeatureWiseScalingLayer()(y)
         y = keras.layers.Dense(units=1, activation='sigmoid')(y)
 
         model = keras.models.Model(inputs=input_layer, outputs=y)
+
         optimizer = keras.optimizers.Adam(learning_rate=learning_rate)
+
         model.compile(optimizer=optimizer, loss='binary_crossentropy',
                       metrics=['accuracy', Precision(), Recall(), AUC()])
 

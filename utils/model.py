@@ -2,7 +2,7 @@ import tensorflow as tf
 from tensorflow import keras
 from utils.sub_layer import fft_for_period
 from utils.layer import InceptionBlock2D, DecompositionLayer
-from utils.miscellaneous import count_divisions_by_two
+from utils.sub_layer import count_divisions_by_two
 
 
 class TimesNetBlock(keras.layers.Layer):
@@ -103,6 +103,8 @@ def time_mixer_block(input_layer, pred_len=1, go_backward=False, dropout_rate=0.
         trend_output = keras.layers.Dense(units=multi_scale_input_layer.shape[1], activation='linear')(trend)
         trend_output = keras.layers.Dropout(dropout_rate)(trend_output)
         trend_list.append(trend_output)
+
+        #output_list.append(keras.layers.Add()([seasonal_output, trend_output]))
 
     output_1 = seasonal_list[0]
     seasonal_mix_list = [output_1]
