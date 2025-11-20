@@ -1,22 +1,24 @@
 import keras, tf2onnx, logging
 import tensorflow as tf
 
-from utils.layer import DecompositionLayer
-from utils.metric import smape
+from utils.layer import FeatureWiseScalingLayer, DecompositionLayer
+
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-model_path = '../model_30.keras'
-best_model = keras.models.load_model(model_path, custom_objects={'DecompositionLayer': DecompositionLayer,
-                                                                 'smape': smape})
+pred_distance = 25
+model_path = f'../models/model_{pred_distance}.keras'
+
+model = keras.models.load_model(model_path, custom_objects={'FeatureWiseScalingLayer': FeatureWiseScalingLayer,
+                                                            'DecompositionLayer': DecompositionLayer})
 
 logging.info(f'Model loaded from {model_path}')
 
-spec = (tf.TensorSpec(best_model.inputs[0].shape, tf.float32, name='input'),)
-onnx_model, _ = tf2onnx.convert.from_keras(best_model, input_signature=spec)
+spec = (tf.TensorSpec(model.inputs[0].shape, tf.float32, name='input'),)
+onnx_model, _ = tf2onnx.convert.from_keras(model, input_signature=spec)
 logging.info('converted ONNX model')
 
-with open('../models/model.onnx', "wb") as f:
+with open(f'../models/model_{pred_distance}.onnx', "wb") as f:
     f.write(onnx_model.SerializeToString())
 
 logging.info('saved ONNX model')
